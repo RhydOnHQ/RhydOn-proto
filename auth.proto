@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package rhydon.auth.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/rhydonhq/proto/gen/go/rhydon/auth/v1;authv1";
+
+// AuthService owns identity and credentials.
+//
+// Note there is no `ValidateToken` RPC. Other services verify JWTs locally
+// using the public keys from GetJWKS — a network hop per request just to
+// check a signature would make Auth a hard dependency of every other
+// service, and its outage would take down the whole platform.
+service AuthService {
+  rpc SignUp(SignUpRequest) returns (SignUpResponse);
+  rpc LogIn(LogInRequest) returns (LogInResponse);
+  rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
+  rpc RevokeToken(RevokeTokenRequest) returns (RevokeTokenResponse);
+
+  // Public keys for local JWT verification. Cache aggressively.
+  rpc GetJWKS(GetJWKSRequest) returns (GetJWKSResponse);
+}
+
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_RIDER = 1;
+  ROLE_DRIVER = 2;
+  ROLE_ADMIN = 3;
+}
+
+message SignUpRequest {
+  string email = 1;
+  string phone = 2;
+  // Never logged. Never stored. Hashed with bcrypt on receipt.
+  string password = 3;
+  string full_name = 4;
+  Role role = 5;
+}
+
+message SignUpResponse {
+  string user_id = 1;
+  TokenPair tokens = 2;
+}
+
+message LogInRequest {
+  // Exactly one of email or phone.
+  oneof identifier {
+    string email = 1;
+    string phone = 2;
+  }
+  string password = 3;
+}
+
+message LogInResponse {
+  string user_id = 1;
+  Role role = 2;
+  TokenPair tokens = 3;
+}
+
+// TokenPair carries a short-lived access token and a long-lived refresh
+// token. Refresh tokens rotate on every use: presenting an already-used
+// refresh token invalidates the whole family, which turns token theft
+// into a detectable event.
+message TokenPair {
+  string access_token = 1;
+  string refresh_token = 2;
+  google.protobuf.Timestamp access_expires_at = 3;
+  google.protobuf.Timestamp refresh_expires_at = 4;
+}
+
+message RefreshTokenRequest {
+  string refresh_token = 1;
+}
+
+message RefreshTokenResponse {
+  TokenPair tokens = 1;
+}
+
+message RevokeTokenRequest {
+  string refresh_token = 1;
+}
+
+message RevokeTokenResponse {}
+
+message GetJWKSRequest {}
+
+message GetJWKSResponse {
+  // Raw JWKS document (RFC 7517). Passed through as a string so key
+  // rotation never requires a proto change.
+  string jwks_json = 1;
+}

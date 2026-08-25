@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package rhydon.common.v1;
+
+option go_package = "github.com/rhydonhq/proto/gen/go/rhydon/common/v1;commonv1";
+
+// Coordinate is a WGS84 lat/lng pair.
+//
+// Always use this rather than bare doubles — it prevents the classic
+// lat/lng argument-order bug at every call site.
+message Coordinate {
+  double latitude = 1;
+  double longitude = 2;
+}
+
+// Money is a fixed-point currency amount.
+//
+// Never represent money as a float. `minor_units` is the amount in the
+// currency's smallest denomination (paise, cents), so 149.50 INR is
+// {minor_units: 14950, currency_code: "INR"}.
+message Money {
+  int64 minor_units = 1;
+  // ISO 4217, e.g. "INR", "USD".
+  string currency_code = 2;
+}
+
+// PageRequest is the standard cursor-pagination request.
+//
+// Cursor-based rather than offset-based: offsets skip or duplicate rows
+// when the underlying set changes between pages, which it constantly does
+// for trip history.
+message PageRequest {
+  // Server clamps this. 0 means "server default".
+  int32 page_size = 1;
+  // Opaque; echo back a `next_page_token` from a prior response.
+  string page_token = 2;
+}
+
+// PageResponse accompanies any paginated result set.
+message PageResponse {
+  // Empty when there are no further pages.
+  string next_page_token = 1;
+}

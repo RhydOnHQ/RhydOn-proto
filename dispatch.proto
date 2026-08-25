@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package rhydon.dispatch.v1;
+
+import "google/protobuf/timestamp.proto";
+import "rhydon/common/v1/types.proto";
+
+option go_package = "github.com/rhydonhq/proto/gen/go/rhydon/dispatch/v1;dispatchv1";
+
+// DispatchService assigns drivers to trips.
+//
+// Stateless coordinator. All durable state lives in Trip (assignments) or
+// Redis (locks, offer TTLs). Scaling out means running more replicas —
+// the assignment lock is what makes that safe.
+service DispatchService {
+  // Called by Trip on ride request. Returns immediately; assignment is
+  // asynchronous, because the offer/timeout/retry loop can run for tens
+  // of seconds and no caller should hold a connection open for that.
+  rpc RequestAssignment(RequestAssignmentRequest) returns (RequestAssignmentResponse);
+
+  // Server-streaming: the driver app holds this open to receive offers.
+  rpc StreamOffers(StreamOffersRequest) returns (stream RideOffer);
+
+  // Driver accepts or declines. The FIRST accept for a given trip wins;
+  // all others get ALREADY_EXISTS.
+  rpc RespondToOffer(RespondToOfferRequest) returns (RespondToOfferResponse);
+
+  rpc CancelAssignment(CancelAssignmentRequest) returns (CancelAssignmentResponse);
+}
+
+message RequestAssignmentRequest {
+  string trip_id = 1;
+  rhydon.common.v1.Coordinate pickup = 2;
+  rhydon.common.v1.Coordinate dropoff = 3;
+  string vehicle_class = 4;
+  // Optional override of the default search radius.
+  double search_radius_meters = 5;
+}
+
+message RequestAssignmentResponse {
+  string assignment_id = 1;
+  // Number of candidates found on the initial sweep. Zero means the
+  // trip will terminate as NO_DRIVERS_AVAILABLE almost immediately.
+  int32 candidates_found = 2;
+}
+
+message StreamOffersRequest {
+  string driver_id = 1;
+}
+
+message RideOffer {
+  string offer_id = 1;
+  string trip_id = 2;
+
+  rhydon.common.v1.Coordinate pickup = 3;
+  rhydon.common.v1.Coordinate dropoff = 4;
+  rhydon.common.v1.Money estimated_fare = 5;
+
+  double pickup_distance_meters = 6;
+  int32 pickup_eta_seconds = 7;
+
+  // Hard deadline. After this the offer is void server-side and has
+  // already moved to the next candidate — the client should stop showing
+  // it rather than letting the driver tap a dead button.
+  google.protobuf.Timestamp expires_at = 8;
+}
+
+enum OfferResponse {
+  OFFER_RESPONSE_UNSPECIFIED = 0;
+  OFFER_RESPONSE_ACCEPT = 1;
+  OFFER_RESPONSE_DECLINE = 2;
+}
+
+message RespondToOfferRequest {
+  string offer_id = 1;
+  string driver_id = 2;
+  OfferResponse response = 3;
+}
+
+message RespondToOfferResponse {
+  bool assigned = 1;
+  // Set when assigned is false: OFFER_EXPIRED, ALREADY_ASSIGNED,
+  // DRIVER_INELIGIBLE, TRIP_CANCELLED.
+  string rejection_reason = 2;
+}
+
+message CancelAssignmentRequest {
+  string trip_id = 1;
+  string reason = 2;
+}
+
+message CancelAssignmentResponse {}

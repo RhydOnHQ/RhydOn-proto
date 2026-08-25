@@ -1,0 +1,14 @@
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  except:
+    # RPC request/response naming: STANDARD wants every RPC to have a
+    # dedicated FooRequest/FooResponse pair. Trip's transitions all
+    # legitimately return the same TripResponse.
+    - RPC_RESPONSE_STANDARD_NAME
+breaking:
+  use:
+    - FILE

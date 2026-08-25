@@ -1,0 +1,197 @@
+syntax = "proto3";
+
+package rhydon.trip.v1;
+
+import "google/protobuf/timestamp.proto";
+import "rhydon/common/v1/types.proto";
+
+option go_package = "github.com/rhydonhq/proto/gen/go/rhydon/trip/v1;tripv1";
+
+// TripService owns the trip lifecycle.
+//
+// Every transition is validated against an explicit transition table and
+// appended to an immutable event log. Illegal transitions return
+// FAILED_PRECONDITION — never a silent no-op, never a panic.
+service TripService {
+  rpc EstimateFare(EstimateFareRequest) returns (EstimateFareResponse);
+  rpc RequestRide(RequestRideRequest) returns (RequestRideResponse);
+  rpc GetTrip(GetTripRequest) returns (GetTripResponse);
+
+  // Lifecycle transitions. Separate RPCs rather than one generic
+  // `UpdateState(state)` — each has different authorization rules and
+  // different required arguments, and a generic setter invites clients
+  // to invent transitions the server never intended.
+  rpc AcceptTrip(AcceptTripRequest) returns (TripResponse);
+  rpc MarkArrived(MarkArrivedRequest) returns (TripResponse);
+  rpc StartTrip(StartTripRequest) returns (TripResponse);
+  rpc CompleteTrip(CompleteTripRequest) returns (TripResponse);
+  rpc CancelTrip(CancelTripRequest) returns (TripResponse);
+
+  // Server-streaming: rider or driver subscribes to live trip updates.
+  rpc WatchTrip(WatchTripRequest) returns (stream TripEvent);
+
+  rpc ListTrips(ListTripsRequest) returns (ListTripsResponse);
+}
+
+// TripState is the full lifecycle.
+//
+// Legal transitions (enforced server-side):
+//   REQUESTED  -> MATCHING, CANCELLED
+//   MATCHING   -> ACCEPTED, NO_DRIVERS_AVAILABLE, CANCELLED
+//   ACCEPTED   -> DRIVER_ARRIVED, CANCELLED
+//   DRIVER_ARRIVED -> IN_PROGRESS, CANCELLED
+//   IN_PROGRESS -> COMPLETED
+//   COMPLETED / CANCELLED / NO_DRIVERS_AVAILABLE -> terminal
+//
+// Note that IN_PROGRESS cannot be cancelled. Once a rider is in the
+// vehicle, ending the trip is a completion (possibly with an adjusted
+// fare), not a cancellation.
+enum TripState {
+  TRIP_STATE_UNSPECIFIED = 0;
+  TRIP_STATE_REQUESTED = 1;
+  TRIP_STATE_MATCHING = 2;
+  TRIP_STATE_ACCEPTED = 3;
+  TRIP_STATE_DRIVER_ARRIVED = 4;
+  TRIP_STATE_IN_PROGRESS = 5;
+  TRIP_STATE_COMPLETED = 6;
+  TRIP_STATE_CANCELLED = 7;
+  TRIP_STATE_NO_DRIVERS_AVAILABLE = 8;
+}
+
+enum CancellationParty {
+  CANCELLATION_PARTY_UNSPECIFIED = 0;
+  CANCELLATION_PARTY_RIDER = 1;
+  CANCELLATION_PARTY_DRIVER = 2;
+  CANCELLATION_PARTY_SYSTEM = 3;
+}
+
+message Trip {
+  string trip_id = 1;
+  string rider_id = 2;
+  // Empty until a driver is assigned.
+  string driver_id = 3;
+  TripState state = 4;
+
+  rhydon.common.v1.Coordinate pickup = 5;
+  rhydon.common.v1.Coordinate dropoff = 6;
+
+  rhydon.common.v1.Money estimated_fare = 7;
+  // Populated only on COMPLETED.
+  rhydon.common.v1.Money final_fare = 8;
+
+  google.protobuf.Timestamp requested_at = 9;
+  google.protobuf.Timestamp accepted_at = 10;
+  google.protobuf.Timestamp started_at = 11;
+  google.protobuf.Timestamp ended_at = 12;
+
+  CancellationParty cancelled_by = 13;
+  string cancellation_reason = 14;
+
+  string vehicle_class = 15;
+}
+
+message EstimateFareRequest {
+  rhydon.common.v1.Coordinate pickup = 1;
+  rhydon.common.v1.Coordinate dropoff = 2;
+  string vehicle_class = 3;
+}
+
+message EstimateFareResponse {
+  rhydon.common.v1.Money estimated_fare = 1;
+  double distance_meters = 2;
+  int32 duration_seconds = 3;
+  // 1.0 means no surge. Surfaced explicitly so the client can disclose it.
+  double surge_multiplier = 4;
+}
+
+message RequestRideRequest {
+  string rider_id = 1;
+  rhydon.common.v1.Coordinate pickup = 2;
+  rhydon.common.v1.Coordinate dropoff = 3;
+  string vehicle_class = 4;
+
+  // Client-generated UUID. Retrying with the same key returns the
+  // original trip rather than creating a second one — the difference
+  // between a flaky network and a double booking.
+  string idempotency_key = 5;
+}
+
+message RequestRideResponse {
+  Trip trip = 1;
+}
+
+message GetTripRequest {
+  string trip_id = 1;
+}
+
+message GetTripResponse {
+  Trip trip = 1;
+}
+
+message TripResponse {
+  Trip trip = 1;
+}
+
+message AcceptTripRequest {
+  string trip_id = 1;
+  string driver_id = 2;
+}
+
+message MarkArrivedRequest {
+  string trip_id = 1;
+  string driver_id = 2;
+}
+
+message StartTripRequest {
+  string trip_id = 1;
+  string driver_id = 2;
+}
+
+message CompleteTripRequest {
+  string trip_id = 1;
+  string driver_id = 2;
+  rhydon.common.v1.Coordinate final_position = 3;
+  // Actual travelled distance, for fare reconciliation against estimate.
+  double actual_distance_meters = 4;
+}
+
+message CancelTripRequest {
+  string trip_id = 1;
+  CancellationParty party = 2;
+  string reason = 3;
+}
+
+message WatchTripRequest {
+  string trip_id = 1;
+}
+
+// TripEvent is one entry in the append-only log. The same shape is
+// published to the outbox, so the stream and the event bus never drift.
+message TripEvent {
+  string event_id = 1;
+  string trip_id = 2;
+  TripState from_state = 3;
+  TripState to_state = 4;
+  google.protobuf.Timestamp occurred_at = 5;
+  // Optional snapshot at the moment of transition.
+  Trip trip = 6;
+}
+
+message ListTripsRequest {
+  // Exactly one. Filtering by neither would return the whole table.
+  oneof subject {
+    string rider_id = 1;
+    string driver_id = 2;
+  }
+  // Optional filters.
+  repeated TripState states = 3;
+  google.protobuf.Timestamp since = 4;
+  google.protobuf.Timestamp until = 5;
+
+  rhydon.common.v1.PageRequest page = 6;
+}
+
+message ListTripsResponse {
+  repeated Trip trips = 1;
+  rhydon.common.v1.PageResponse page = 2;
+}

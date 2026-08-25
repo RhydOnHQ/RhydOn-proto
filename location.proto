@@ -1,0 +1,101 @@
+syntax = "proto3";
+
+package rhydon.location.v1;
+
+import "google/protobuf/timestamp.proto";
+import "rhydon/common/v1/types.proto";
+
+option go_package = "github.com/rhydonhq/proto/gen/go/rhydon/location/v1;locationv1";
+
+// LocationService owns the live driver index.
+//
+// Live positions live in Redis GEO with a heartbeat TTL; Postgres/PostGIS
+// holds history only. A driver who stops streaming ages out of the
+// candidate pool automatically rather than needing an explicit "offline".
+service LocationService {
+  // Client-streaming: the driver app opens one long-lived stream and
+  // pushes positions. One RPC per GPS tick would be pure overhead —
+  // a connection setup for a 16-byte payload every few seconds.
+  rpc StreamLocation(stream LocationUpdate) returns (StreamLocationSummary);
+
+  // Explicit availability toggle, independent of whether the stream is up.
+  rpc SetDriverStatus(SetDriverStatusRequest) returns (SetDriverStatusResponse);
+
+  // Called by Dispatch during matching. Latency-critical.
+  rpc FindNearbyDrivers(FindNearbyDriversRequest) returns (FindNearbyDriversResponse);
+
+  rpc GetDriverLocation(GetDriverLocationRequest) returns (GetDriverLocationResponse);
+}
+
+enum DriverStatus {
+  DRIVER_STATUS_UNSPECIFIED = 0;
+  // Not accepting rides.
+  DRIVER_STATUS_OFFLINE = 1;
+  // Accepting rides. Eligible for matching.
+  DRIVER_STATUS_AVAILABLE = 2;
+  // Mid-trip. Excluded from matching.
+  DRIVER_STATUS_ON_TRIP = 3;
+}
+
+message LocationUpdate {
+  string driver_id = 1;
+  rhydon.common.v1.Coordinate position = 2;
+  // Degrees clockwise from north, 0-359. Used for ETA refinement.
+  int32 heading_degrees = 3;
+  double speed_mps = 4;
+  // Device-side timestamp. Trust the server clock for ordering; this is
+  // for diagnosing lag, not for sequencing.
+  google.protobuf.Timestamp captured_at = 5;
+  // Horizontal accuracy. Updates above a threshold are discarded rather
+  // than poisoning the index with a 2km-radius "fix".
+  double accuracy_meters = 6;
+}
+
+message StreamLocationSummary {
+  int64 updates_received = 1;
+  int64 updates_discarded = 2;
+}
+
+message SetDriverStatusRequest {
+  string driver_id = 1;
+  DriverStatus status = 2;
+}
+
+message SetDriverStatusResponse {
+  DriverStatus status = 1;
+}
+
+message FindNearbyDriversRequest {
+  rhydon.common.v1.Coordinate origin = 1;
+  double radius_meters = 2;
+  // Server clamps. Dispatch only ever needs a handful of candidates.
+  int32 limit = 3;
+  // Optional. Empty means any vehicle class.
+  repeated string vehicle_classes = 4;
+}
+
+message NearbyDriver {
+  string driver_id = 1;
+  rhydon.common.v1.Coordinate position = 2;
+  // Straight-line, not road distance. Dispatch ranks on this; a routing
+  // engine can refine the top N if you ever add one.
+  double distance_meters = 3;
+  string vehicle_class = 4;
+  // Age of the position fix. Dispatch may reject stale candidates.
+  google.protobuf.Timestamp last_seen_at = 5;
+}
+
+message FindNearbyDriversResponse {
+  // Ordered nearest-first.
+  repeated NearbyDriver drivers = 1;
+}
+
+message GetDriverLocationRequest {
+  string driver_id = 1;
+}
+
+message GetDriverLocationResponse {
+  rhydon.common.v1.Coordinate position = 1;
+  DriverStatus status = 2;
+  google.protobuf.Timestamp last_seen_at = 3;
+}
