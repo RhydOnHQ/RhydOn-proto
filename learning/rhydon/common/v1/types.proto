@@ -1,0 +1,19 @@
+// LOCAL COPY for sandbox isolation only. `learning/` is its own independent
+// buf module (see learning/buf.yaml) so that broken practice code never
+// affects `buf lint`/`buf generate`/`buf breaking` at the repo root — but
+// that also means it can't resolve an import into the REAL module at
+// ../../rhydon/common/v1/types.proto, since buf doesn't do implicit
+// cross-module resolution. This file exists purely so Exercise 3 can
+// practice the import + fully-qualified-type mechanics. The real one lives
+// at ../../../rhydon/common/v1/types.proto — go compare them.
+
+syntax = "proto3";
+
+package rhydon.common.v1;
+
+option go_package = "github.com/rhydonhq/proto/gen/go/rhydon/common/v1;commonv1";
+
+message Coordinate {
+  double latitude = 1;
+  double longitude = 2;
+}

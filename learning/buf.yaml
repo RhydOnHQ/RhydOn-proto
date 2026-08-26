@@ -1,0 +1,11 @@
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  except:
+    # Matches the root buf.yaml's exception: streaming a domain message
+    # directly (Ping, like the real repo's TripEvent) is a legitimate
+    # pattern, not every RPC needs a dedicated *Response wrapper.
+    - RPC_RESPONSE_STANDARD_NAME
